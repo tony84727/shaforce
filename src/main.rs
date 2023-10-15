@@ -1,29 +1,55 @@
-use std::{ops::RangeInclusive, sync::mpsc::Sender};
+use std::ops::RangeInclusive;
 
-use rayon::prelude::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+use rayon::prelude::{ParallelBridge, ParallelIterator};
 use sha1::{Digest, Sha1};
 
 const CHARS: RangeInclusive<char> = '!'..='~';
 
-fn dfs(out: Sender<String>, current: String, remaining_level: usize) {
-    if remaining_level == 0 {
-        return;
+struct Permutation {
+    stack: Vec<(RangeInclusive<char>, String)>,
+    max_length: usize,
+}
+
+impl Iterator for Permutation {
+    type Item = String;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.pop() {
+            Some((mut chars, prefix)) => match chars.next() {
+                Some(c) => {
+                    let next = format!("{prefix}{c}");
+                    if next.len() < self.max_length {
+                        self.stack.push((CHARS.into_iter(), next.clone()));
+                    }
+                    self.stack.push((chars, prefix));
+                    Some(next)
+                }
+                None => self.next(),
+            },
+            None => None,
+        }
     }
-    CHARS.into_iter().into_par_iter().for_each(|c| {
-        let mut next = current.clone();
-        next.push(c);
-        out.send(next.clone()).unwrap();
-        dfs(out.clone(), next, remaining_level - 1);
-    })
+}
+
+impl Permutation {
+    fn new(max_length: usize) -> Self {
+        Self {
+            stack: vec![(CHARS.into_iter(), String::new())],
+            max_length,
+        }
+    }
 }
 
 fn main() {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(|| dfs(sender, String::new(), 12));
-    receiver.into_iter().par_bridge().for_each(|input| {
-        let mut h = Sha1::new();
-        h.update(input.as_bytes());
-        let hash = h.finalize();
-        println!("{input}\t{hash:x}");
-    });
+    let p = Permutation::new(8);
+    p.par_bridge()
+        .map(|input| {
+            let mut hash = Sha1::new();
+            hash.update(input.as_bytes());
+            let hash = hash.finalize();
+            format!("{input}\t{hash:x}")
+        })
+        .for_each(|result| {
+            println!("{result}");
+        })
 }
