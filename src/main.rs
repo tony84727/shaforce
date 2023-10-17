@@ -1,5 +1,6 @@
-use std::ops::RangeInclusive;
+use std::io::BufWriter;
 use std::time::Duration;
+use std::{io::Write, ops::RangeInclusive};
 
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -27,15 +28,18 @@ fn main() {
                 let hash = hash.finalize();
                 format!("{input}\t{hash:x}")
             })
-            .for_each(|_result| {
-                sender.send(()).unwrap();
+            .for_each(|result| {
+                sender.send(result).unwrap();
             });
     });
-    for _ in receiver.into_iter() {
+    let out = std::fs::File::create("out").unwrap();
+    let mut writer = BufWriter::with_capacity(4 * 1024 * 1024, out);
+    for result in receiver.into_iter() {
         counter += 1;
+        writer.write_all(format!("{result}\n").as_bytes()).unwrap();
         let now = std::time::Instant::now();
         if now - last >= second {
-            println!("{counter}/s");
+            eprintln!("{counter}/s");
             counter = 0;
             last = now;
         }
