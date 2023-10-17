@@ -1,5 +1,5 @@
+use std::ops::RangeInclusive;
 use std::time::Duration;
-use std::{ops::RangeInclusive, sync::mpsc::channel};
 
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -11,7 +11,7 @@ fn main() {
     let mut counter = 0;
     let mut last = std::time::Instant::now();
     let second = Duration::from_secs(1);
-    let (sender, receiver) = channel();
+    let (sender, receiver) = crossbeam::channel::unbounded();
     std::thread::spawn(move || {
         (0..8)
             .into_par_iter()
