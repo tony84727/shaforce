@@ -1,9 +1,11 @@
 use std::fmt::LowerHex;
+use std::fs::File;
 use std::io::BufWriter;
 use std::num::Wrapping;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io::Write, ops::RangeInclusive};
 
+use clap::{Parser, Subcommand};
 use itertools::Itertools;
 use rayon::prelude::*;
 
@@ -109,38 +111,107 @@ impl LowerHex for Sha1 {
     }
 }
 
+#[derive(Parser)]
+struct CommandOption {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Compute sha1 hash by CPU
+    Cpu(CpuOption),
+}
+
+#[derive(Parser)]
+struct CpuOption {
+    /// Optional destination to dump results to a file
+    output_file: Option<String>,
+}
+
+struct Sink<I>
+where
+    I: Iterator<Item = String>,
+{
+    counter: usize,
+    last: Option<Instant>,
+    output: Option<BufWriter<File>>,
+    source: I,
+}
+
+impl<I> Sink<I>
+where
+    I: Iterator<Item = String>,
+{
+    fn new(source: I) -> Self {
+        Self {
+            counter: 0,
+            last: None,
+            output: None,
+            source,
+        }
+    }
+    fn with_output(&mut self, output: File) -> &mut Self {
+        self.output = Some(BufWriter::new(output));
+        self
+    }
+    fn sink(self) {
+        let Self {
+            mut counter,
+            mut last,
+            mut output,
+            source,
+        } = self;
+        let second = Duration::from_secs(1);
+        for result in source {
+            let now = Instant::now();
+            counter += 1;
+            if let Some(output) = output.as_mut() {
+                output.write_all(format!("{result}\n").as_bytes()).unwrap();
+            }
+            match last {
+                Some(l) => {
+                    if now - l >= second {
+                        eprintln!("{counter}/s");
+                        counter = 0;
+                        last = Some(now);
+                    }
+                }
+                None => {
+                    last = Some(now);
+                }
+            }
+        }
+    }
+}
+
 fn main() {
-    let mut counter = 0;
-    let mut last = std::time::Instant::now();
-    let second = Duration::from_secs(1);
-    let (sender, receiver) = crossbeam::channel::unbounded();
-    std::thread::spawn(move || {
-        (0..8)
-            .into_par_iter()
-            .flat_map(|length| {
-                CHARS
-                    .permutations(length)
-                    .par_bridge()
-                    .map(|chars| chars.into_iter().collect::<String>())
-            })
-            .map(|input: String| {
-                let hash = sha1(&input);
-                format!("{input}\t{hash:x}")
-            })
-            .for_each(|result| {
-                sender.send(result).unwrap();
+    let option = CommandOption::parse();
+    match option.command {
+        Command::Cpu(cpu_option) => {
+            let (sender, receiver) = crossbeam::channel::unbounded();
+            std::thread::spawn(move || {
+                (0..8)
+                    .into_par_iter()
+                    .flat_map(|length| {
+                        CHARS
+                            .permutations(length)
+                            .par_bridge()
+                            .map(|chars| chars.into_iter().collect::<String>())
+                    })
+                    .map(|input: String| {
+                        let hash = sha1(&input);
+                        format!("{input}\t{hash:x}")
+                    })
+                    .for_each(|result| {
+                        sender.send(result).unwrap();
+                    });
             });
-    });
-    let out = std::fs::File::create("out").unwrap();
-    let mut writer = BufWriter::with_capacity(4 * 1024 * 1024, out);
-    for result in receiver.into_iter() {
-        counter += 1;
-        writer.write_all(format!("{result}\n").as_bytes()).unwrap();
-        let now = std::time::Instant::now();
-        if now - last >= second {
-            eprintln!("{counter}/s");
-            counter = 0;
-            last = now;
+            let mut sink = Sink::new(receiver.into_iter());
+            if let Some(out) = cpu_option.output_file {
+                sink.with_output(File::create(out).unwrap());
+            }
+            sink.sink();
         }
     }
 }
