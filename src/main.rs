@@ -121,6 +121,8 @@ struct CommandOption {
 enum Command {
     /// Compute sha1 hash by CPU
     Cpu(CpuOption),
+    /// Compute sha1 hash by GPU
+    Gpu,
 }
 
 #[derive(Parser)]
@@ -213,6 +215,7 @@ fn main() {
             }
             sink.sink();
         }
+        Command::Gpu => {}
     }
 }
 
