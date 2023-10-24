@@ -8,6 +8,12 @@ use std::{io::Write, ops::RangeInclusive};
 use clap::{Parser, Subcommand};
 use itertools::Itertools;
 use rayon::prelude::*;
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::{
+    include_wgsl, AdapterInfo, BindGroupEntry, BufferDescriptor, BufferUsages,
+    CommandEncoderDescriptor, ComputePassDescriptor, ComputePipelineDescriptor, DeviceDescriptor,
+    Features, InstanceDescriptor,
+};
 
 const CHARS: RangeInclusive<char> = '!'..='~';
 
@@ -187,7 +193,12 @@ where
     }
 }
 
-fn main() {
+fn print_gpu_info(info: &AdapterInfo) {
+    println!("using gpu {}", info.name);
+}
+
+#[tokio::main]
+async fn main() {
     let option = CommandOption::parse();
     match option.command {
         Command::Cpu(cpu_option) => {
@@ -215,7 +226,91 @@ fn main() {
             }
             sink.sink();
         }
-        Command::Gpu => {}
+        Command::Gpu => {
+            let instance = wgpu::Instance::new(InstanceDescriptor::default());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptionsBase::default())
+                .await
+                .expect("wgpu adapter");
+            let info = adapter.get_info();
+            let project_label = Some("shaforce");
+            print_gpu_info(&info);
+            let (device, queue) = adapter
+                .request_device(
+                    &DeviceDescriptor {
+                        label: project_label,
+                        features: Features::default(),
+                        limits: wgpu::Limits::downlevel_defaults(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let compute_module = device.create_shader_module(include_wgsl!("sha1.wgsl"));
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+                label: project_label,
+                layout: None,
+                module: &compute_module,
+                entry_point: "main",
+            });
+            let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: project_label,
+            });
+            let input = "!".as_bytes();
+            let input_buffer = device.create_buffer_init(&BufferInitDescriptor {
+                label: project_label,
+                contents: input,
+                usage: BufferUsages::COPY_SRC | BufferUsages::STORAGE,
+            });
+            let result_buffer = device.create_buffer(&BufferDescriptor {
+                label: project_label,
+                size: 20,
+                usage: BufferUsages::COPY_SRC | BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+            let staging_buffer = device.create_buffer(&BufferDescriptor {
+                label: project_label,
+                size: 20,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: project_label,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: input_buffer.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: result_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            {
+                let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                    label: project_label,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+            encoder.copy_buffer_to_buffer(&result_buffer, 0, &staging_buffer, 0, 20);
+            queue.submit(Some(encoder.finish()));
+            let (sender, receiver) = crossbeam::channel::unbounded();
+            let output_slice = staging_buffer.slice(..);
+            output_slice.map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
+            device.poll(wgpu::MaintainBase::Wait);
+            let _r = receiver.recv().unwrap().unwrap();
+            let view = output_slice.get_mapped_range();
+            let mut result: [u8; 20] = Default::default();
+            for (i, byte) in view.into_iter().enumerate() {
+                result[i] = *byte;
+            }
+            let result = Sha1(result);
+            println!("{result:x}");
+        }
     }
 }
 
