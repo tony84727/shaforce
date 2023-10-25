@@ -256,10 +256,10 @@ async fn main() {
             let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: project_label,
             });
-            let input = "!".as_bytes();
+            let input = preprocessing("!".as_bytes().to_vec());
             let input_buffer = device.create_buffer_init(&BufferInitDescriptor {
                 label: project_label,
-                contents: input,
+                contents: &input,
                 usage: BufferUsages::COPY_SRC | BufferUsages::STORAGE,
             });
             let result_buffer = device.create_buffer(&BufferDescriptor {
