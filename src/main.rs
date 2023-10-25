@@ -256,7 +256,7 @@ async fn main() {
             let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
                 label: project_label,
             });
-            let input = preprocessing("!".as_bytes().to_vec());
+            let input: Vec<u8> = preprocessing("".as_bytes().to_vec());
             let input_buffer = device.create_buffer_init(&BufferInitDescriptor {
                 label: project_label,
                 contents: &input,
